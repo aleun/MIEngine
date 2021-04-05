@@ -360,7 +360,7 @@ namespace Microsoft.MIDebugEngine
                     }
                     if (bindResult.BoundBreakpoints == null || bindResult.BoundBreakpoints.Count == 0)
                     {
-                        this.SetError(new AD7ErrorBreakpoint(this, bindResult.ErrorMessage, enum_BP_ERROR_TYPE.BPET_GENERAL_ERROR), true);
+                        this.SetError(new AD7ErrorBreakpoint(this, bindResult.ErrorMessage), true);
                     }
                     else
                     {
@@ -461,52 +461,26 @@ namespace Microsoft.MIDebugEngine
             }
         }
 
-        // wrap asynchronous enable in timeout logic to provide a synchronous interface to Enable
-        private int EnableWithTimeout(PendingBreakpoint bp, bool desiredValue)
+        private int EnableWithBind()
         {
-            Task enableTask = null;
+            Task bindTask = null;
             _engine.DebuggedProcess.WorkerThread.RunOperation(() =>
             {
-                enableTask = _engine.DebuggedProcess.AddInternalBreakAction(
-                    () => bp.EnableAsync(desiredValue, _engine.DebuggedProcess)
-                );
+                bindTask = _engine.DebuggedProcess.AddInternalBreakAction(this.BindAsync);
             });
 
-            void ProcessException(Exception exception)
+            bindTask.Wait(_engine.GetBPLongBindTimeout());
+            if (!bindTask.IsCompleted)
             {
-                _enabled = !desiredValue;
-                var baseException = exception.GetBaseException();
-                var miException = baseException as UnexpectedMIResultException;
-                var errorMessage = miException?.MIError ?? baseException.Message;
-                this.SetError(new AD7ErrorBreakpoint(this, errorMessage, enum_BP_ERROR_TYPE.BPET_GENERAL_ERROR), true);
-                // explicitly send error message because VS doesn't surface the error otherwise
-                _engine.Callback.OnError(errorMessage);
-            }
+                // temporary error that will either be replaced by real error or cleared by successful completion of continuations below
+                this.SetError(new AD7ErrorBreakpoint(this, ResourceStrings.LongBind, enum_BP_ERROR_TYPE.BPET_SEV_LOW | enum_BP_ERROR_TYPE.BPET_TYPE_WARNING), true);
 
-            try
-            {
-                // enableTask.Wait(_engine.GetBPLongEnableTimeout());
-                enableTask.Wait();
-                if (!enableTask.IsCompleted)
+                bindTask.ContinueWith((task) =>
                 {
-                    _enabled = !desiredValue;
-                    // temporary error that will either be replaced by real error or cleared by successful completion of continuations below
-                    this.SetError(new AD7ErrorBreakpoint(this, ResourceStrings.LongEnable, enum_BP_ERROR_TYPE.BPET_GENERAL_ERROR), true);
+                    _BPError = null;
+                }, TaskContinuationOptions.OnlyOnRanToCompletion);
 
-                    // set up continuations
-                    enableTask.ContinueWith((task) => ProcessException(task.Exception), TaskContinuationOptions.OnlyOnFaulted);
-                    enableTask.ContinueWith((task) =>
-                    {
-                        _enabled = desiredValue;
-                        _BPError = null;
-                    }, TaskContinuationOptions.OnlyOnRanToCompletion);
-                    return Constants.E_FAIL;
-                }
-            } catch (AggregateException e)
-            {
-                // This code is reached if the synchronous Wait call above faults and completes without timeout
-                ProcessException(e);
-                return Constants.E_FAIL;
+                return Constants.S_FALSE;
             }
 
             return Constants.S_OK;
@@ -519,14 +493,27 @@ namespace Microsoft.MIDebugEngine
             if (_enabled != newValue)
             {
                 _enabled = newValue;
-                PendingBreakpoint bp = _bp;
-                if (bp != null)
+                if (_engine.DebuggedProcess.LaunchOptions.RequireHardwareBreakpoints)
                 {
-                    if (_engine.DebuggedProcess.LaunchOptions.RequireHardwareBreakpoints)
+                    if (_enabled)
                     {
-                        return EnableWithTimeout(bp, newValue);
+                        EnableWithBind();
                     } else
                     {
+                        lock (_boundBreakpoints)
+                        {
+                            foreach (var boundBp in _boundBreakpoints)
+                            {
+                                _engine.Callback.OnBreakpointUnbound(boundBp, enum_BP_UNBOUND_REASON.BPUR_UNKNOWN);
+                            }
+                            (this as IDebugPendingBreakpoint2).Delete();
+                            _deleted = false;
+                        }
+                    }
+                } else
+                {
+                    PendingBreakpoint bp = _bp;
+                    if (bp != null) {
                         _engine.DebuggedProcess.WorkerThread.RunOperation(() =>
                         {
                             _engine.DebuggedProcess.AddInternalBreakAction(
