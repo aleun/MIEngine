@@ -497,7 +497,7 @@ namespace Microsoft.MIDebugEngine
                 {
                     if (_enabled)
                     {
-                        EnableWithBind();
+                        return EnableWithBind();
                     } else
                     {
                         lock (_boundBreakpoints)
@@ -507,6 +507,7 @@ namespace Microsoft.MIDebugEngine
                                 _engine.Callback.OnBreakpointUnbound(boundBp, enum_BP_UNBOUND_REASON.BPUR_UNKNOWN);
                             }
                             (this as IDebugPendingBreakpoint2).Delete();
+                            _boundBreakpoints.Clear();
                             _deleted = false;
                         }
                     }
