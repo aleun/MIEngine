@@ -1155,6 +1155,18 @@ namespace Microsoft.MIDebugEngine
                 bool fContinue;
                 TupleValue frame = results.Results.TryFind<TupleValue>("frame");
                 AD7BoundBreakpoint[] bkpt = _breakpointManager.FindHitBreakpoints(bkptno, addr, frame, out fContinue);
+
+                if (bkpt != null)
+                {
+                    foreach (var b in bkpt)
+                    {
+                        Logger.WriteLine("Hit bp #{0}: {1:X}", b.Number, b.Addr);
+                    }
+                } else
+                {
+                    Logger.WriteLine("No hit breakpoints found");
+                }
+
                 await _breakpointManager.DeleteBreakpointsPendingDeletion();
 
                 if (bkpt != null)

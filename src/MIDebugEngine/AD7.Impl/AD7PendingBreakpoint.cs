@@ -460,6 +460,7 @@ namespace Microsoft.MIDebugEngine
             {
                 bp = _bp;
                 _bp = null;
+                _pendingDelete = false;
             }
             if (bp != null)
             {
@@ -481,7 +482,21 @@ namespace Microsoft.MIDebugEngine
             // bind
             if (_enabled)
             {
-                return BindWithTimeout();
+                var ret = BindWithTimeout();
+                foreach (var boundBp in _boundBreakpoints)
+                {
+                    _engine.Logger.WriteLine("Bound bp #{0}: {1:X}", boundBp.Number, boundBp.Addr);
+                }
+
+                lock(_boundBreakpoints)
+                {
+                    foreach (var boundBp in _boundBreakpoints)
+                    {
+                        _engine.Logger.WriteLine("Remaining bp #{0}: {1:X}", boundBp.Number, boundBp.Addr);
+                    }
+                }
+
+                return ret;
             }
 
             // unbind
@@ -490,10 +505,21 @@ namespace Microsoft.MIDebugEngine
                 foreach (var boundBp in _boundBreakpoints)
                 {
                     _engine.Callback.OnBreakpointUnbound(boundBp, enum_BP_UNBOUND_REASON.BPUR_UNKNOWN);
+                    _engine.Logger.WriteLine("Unbound bp #{0}: {1:X}", boundBp.Number, boundBp.Addr);
                 }
                 (this as IDebugPendingBreakpoint2).Delete();
                 _boundBreakpoints.Clear();
-                _deleted = false; // this pending breakpoint is not actually deleted, just disabled
+                _BPError = null;
+                 // this pending breakpoint is not actually deleted, just disabled, so override these flags
+                _deleted = false;
+            }
+
+            lock(_boundBreakpoints)
+            {
+                foreach (var boundBp in _boundBreakpoints)
+                {
+                    _engine.Logger.WriteLine("Remaining bp #{0}: {1:X}", boundBp.Number, boundBp.Addr);
+                }
             }
 
             return Constants.S_OK;
